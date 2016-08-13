@@ -1,0 +1,2048 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>CPython internals and the VM</title>
+
+		<link href='https://fonts.googleapis.com/css?family=Droid+Sans+Mono' rel='stylesheet' type='text/css'>
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/black.css">
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+
+		<style type="text/css">
+		.reveal code, code {
+			font-family: "Droid Sans Mono", "Office Code Pro", "Source Code Pro", Monaco, Consolas, monospace;
+		}
+		.reveal h3, .reveal h4 {
+			text-transform: none;
+		}
+
+		.leftcode {
+			width: 45%;
+			float: left;
+		}
+
+		.stackright {
+			width: 45%;
+			float: right;
+		}
+		.reveal .stack {
+			border: 3px solid white;
+			margin: 2px;
+		}
+
+		.footer {
+			position: absolute;
+			right: 0;
+			bottom: 0;
+			left: 0;
+			padding: 1em;
+			text-align: center;
+		}
+
+		.reveal .history {
+			font-size: 50%;
+			top: 140px;
+			bottom: 0;
+			left: -130px;
+			padding: 1em;
+			position: absolute;
+		}
+
+		.reveal .history-item {
+			border: 2px solid #999;
+			color: #999;;
+			margin: 4px;
+			padding: 5px;
+			text-align: center;
+		}
+		.reveal .active {
+			color: #fff;
+			border: 2px solid white;
+		}
+		</style>
+	</head>
+	<body>
+
+		<div class="reveal">
+			<div class="slides">
+				<div class="footer"><a href="https://twitter.com/chris_swenson">@chris_swenson</a>
+			  &nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				&nbsp;
+				<a href="https://github.com/swenson">github.com/swenson</a>
+				</div>
+				<section>
+					<h1>CPython internals and the VM</h1>
+					<p><strong>Christopher Swenson</strong></p>
+					<p>PyCon AU 2016</p>
+				</section>
+				<section>
+					<h1>What is this talk?</h1>
+					<p>What happens when CPython (2.7.11) starts?</p>
+					<p>How does CPython execute Python code</p>
+					<p>Lots of simplifications for the sake of time</p>
+
+					<br />
+
+					<h2>Who is this talk for?</h2>
+					<p>Curious people who can maybe squint and read C</p>
+				</section>
+				<section>
+					<h1>Why am I curious?</h1>
+					<p>I'm always curious</p>
+					<p>I love language implementation details</p>
+					<p>Deeper understanding</p>
+				</section>
+
+				<section>
+					<h1>What is CPython?</h1>
+					<ul>
+						<li>Compiler to convert Python to bytecode (PYC)</li>
+						<li>VM to run the bytecode</li>
+						<li>C interface to interact with the VM</li>
+					</ul>
+				</section>
+
+				<section>
+					<h1>CPython VM</h1>
+					<ul>
+						<li>Designed to be slow and correct</li>
+						<li>Stack-based (instead of register, such as LLVM)</li>
+						<li><a href="https://docs.python.org/2.7/library/dis.html?highlight=append%20list">
+							<code>dis</code></a> module has most of the details</li>
+					</ul>
+				</section>
+
+				<section>
+					<pre><code data-trim data-noescape>
+>>> import dis
+>>> def add(x, y):
+...     z = x + y
+...     return z - 1
+>>> dis.dis(add)
+  2           0 LOAD_FAST                0 (x)
+              3 LOAD_FAST                1 (y)
+              6 BINARY_ADD
+              7 STORE_FAST               2 (z)
+
+  3          10 LOAD_FAST                2 (z)
+             13 LOAD_CONST               1 (1)
+             16 BINARY_SUBTRACT
+             17 RETURN_VALUE
+					 </code></pre>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+<mark>LOAD_FAST 0</mark>
+LOAD_FAST 1
+BINARY_ADD
+STORE_FAST 2
+LOAD_FAST 2
+LOAD_CONST 1
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+					 	<div class="stack"><code>x</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+<mark>LOAD_FAST 1</mark>
+BINARY_ADD
+STORE_FAST 2
+LOAD_FAST 2
+LOAD_CONST 1
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+						<div class="stack"><code>y</code></div>
+					 	<div class="stack"><code>x</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+<mark>BINARY_ADD</mark>
+STORE_FAST 2
+LOAD_FAST 2
+LOAD_CONST 1
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+						<div class="stack"><code>x + y</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+BINARY_ADD
+<mark>STORE_FAST 2</mark>
+LOAD_FAST 2
+LOAD_CONST 1
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+					 <em>z = x + y</em>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+BINARY_ADD
+STORE_FAST 2
+<mark>LOAD_FAST 2</mark>
+LOAD_CONST 1
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+						<div class="stack"><code>z</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+BINARY_ADD
+STORE_FAST 2
+LOAD_FAST 2
+<mark>LOAD_CONST 1</mark>
+BINARY_SUBTRACT
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+  					 <div class="stack"><code>1</code></div>
+						 <div class="stack"><code>z</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+BINARY_ADD
+STORE_FAST 2
+LOAD_FAST 2
+LOAD_CONST 1
+<mark>BINARY_SUBTRACT</mark>
+RETURN_VALUE
+					 </code></pre>
+					 <div class="stackright">
+  					 <div class="stack"><code>z - 1</code></div>
+					 </div>
+<div class="clearfix"></div>
+			 				</section>
+				</section>
+
+				<section data-transition="fade-in fade-out">
+					<pre><code data-trim data-noescape class="leftcode">
+LOAD_FAST 0
+LOAD_FAST 1
+BINARY_ADD
+STORE_FAST 2
+LOAD_FAST 2
+LOAD_CONST 1
+BINARY_SUBTRACT
+<mark>RETURN_VALUE</mark>
+					 </code></pre>
+					 <div class="stackright">
+						 returns <em>z - 1</em>
+					 </div>
+<div class="clearfix"></div>
+				</section>
+
+
+				<section>
+					<h1>A few notes</h1>
+					<ul>
+						<li>CPython does no optimization of the bytecode</li>
+						<li>No types</li>
+						<li>Have to be careful, e.g., "+" may not be addition</li>
+						<li>... and not commutative</li>
+					</ul>
+				</section>
+
+
+				<section data-transition="fade-in fade-out">
+					<h3>Fun exercise!</h3>
+					<p>You can crash the compiler by doing this:</p>
+					<pre><code data-trim data-noescape>
+def f():
+  a0 = 0
+	a1 = 1
+	# ...
+	a0 + a1 + # ...
+</code></pre>
+
+<p>With about <strong>87,317</strong> variables.</p>
+				</section>
+
+				<section>
+					<h3>Interpreter main loop</h3>
+					<p>
+						<a href="https://swenson.github.io/python-xr/Python/ceval.c.html">Python/ceval.c</a>:
+						<a href="https://swenson.github.io/python-xr/Python/ceval.c.html#line-689">PyEval_EvalFrameEx</a></p>
+				</section>
+
+				<section>
+					<h3>Aside: python-xr</h3>
+
+					<p>
+						<a href="https://github.com/swenson/python-xr/">python-xr</a>, a static-site hosting of
+						source code cross reference, generated using ctags and pygments.
+					</p>
+					<p>
+						<a href="https://swenson.github.io/python-xr/">hosted on GitHub Pages</a>
+					</p>
+				</section>
+
+				<section>
+					<h3>Startup!</h3>
+					<p>A question I always had was, what does CPython do
+						when it starts up?</p>
+					<p>So let's do that</p>
+				</section>
+
+
+
+				<section data-transition="fade-in fade-out">
+					<div class="history">
+						<div class="history-item active">main</div>
+					</div>
+					<h3><code>Modules/python.c</code></h3>
+					<h4><code>main</code></h4>
+    <pre><code data-trim data-noescape>
+#include "Python.h"
+int
+main(int argc, char **argv)
+{
+	return Py_Main(argc, argv);
+}
+    </code></pre>
+				</section>
+
+
+
+
+				<section data-transition="fade-in fade-out">
+					<div class="history">
+						<div class="history-item active">main</div>
+					</div>
+					<h3><code>Modules/python.c</code></h3>
+					<h4><code>main</code></h4>
+    <pre><code data-trim data-noescape>
+#include "Python.h"
+int
+main(int argc, char **argv)
+{
+	<mark>return Py_Main(argc, argv);</mark>
+}
+    </code></pre>
+				</section>
+
+
+
+				<section data-transition="fade-in fade-out">
+					<div class="history">
+						<div class="history-item active">Py_Main</div>
+						<div class="history-item">main</div>
+					</div>
+					<h3><code>Modules/main.c</code></h3>
+					<h4><code>Py_Main</code></h4>
+    <pre><code data-trim data-noescape>
+/* Main program */
+
+int
+Py_Main(int argc, char **argv)
+{
+    int c;
+    int sts;
+    char *command = NULL;
+    char *filename = NULL;
+    char *module = NULL;
+    FILE *fp = stdin;
+    char *p;
+    int unbuffered = 0;
+    int skipfirstline = 0;
+    int stdin_is_interactive = 0;
+    int help = 0;
+    </code></pre>
+
+					<p>Lot of declarations</p>
+				</section>
+
+		<section data-transition="fade-in fade-out">
+			<div class="history">
+				<div class="history-item active">Py_Main</div>
+				<div class="history-item">main</div>
+			</div>
+			<h3><code>Modules/main.c</code></h3>
+			<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+/* Hash randomization needed early for all string operations
+	 (including -W and -X options). */
+_PyOS_opterr = 0;  /* prevent printing the error in 1st pass */
+while ((c = _PyOS_GetOpt(argc, argv, PROGRAM_OPTS)) != EOF) {
+		if (c == 'm' || c == 'c') {
+				/* -c / -m is the last option: following arguments are
+					 not interpreter options. */
+				break;
+		}
+		switch (c) {
+		case 'E':
+				Py_IgnoreEnvironmentFlag++;
+				break;
+		case 'R':
+				Py_HashRandomizationFlag++;
+				break;
+</code></pre>
+		</section>
+
+		<section>
+			<p>Early hash randomization!</p>
+			<p>Python dictionaries <a href="http://bugs.python.org/issue13703">are vulnerable</a> to DoS attacks</p>
+		</section>
+
+		<section data-transition="fade-in fade-out">
+			<div class="history">
+				<div class="history-item active">Py_Main</div>
+				<div class="history-item">main</div>
+			</div>
+			<h3><code>Modules/main.c</code></h3>
+			<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+/* The variable is only tested for existence here; _PyRandom_Init will
+   check its value further. */
+if (!Py_HashRandomizationFlag &&
+    (p = Py_GETENV("PYTHONHASHSEED")) && *p != '\0')
+    Py_HashRandomizationFlag = 1;
+
+_PyRandom_Init();
+
+PySys_ResetWarnOptions();
+_PyOS_ResetGetOpt();
+</code></pre>
+		</section>
+
+		<section data-transition="fade-in fade-out">
+			<div class="history">
+				<div class="history-item active">Py_Main</div>
+				<div class="history-item">main</div>
+			</div>
+			<h3><code>Modules/main.c</code></h3>
+			<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+/* The variable is only tested for existence here; _PyRandom_Init will
+   check its value further. */
+if (!Py_HashRandomizationFlag &&
+    (p = Py_GETENV("PYTHONHASHSEED")) && *p != '\0')
+    Py_HashRandomizationFlag = 1;
+
+<mark>_PyRandom_Init();</mark>
+
+PySys_ResetWarnOptions();
+_PyOS_ResetGetOpt();
+</code></pre>
+		</section>
+
+		<section>
+			<p>I care a lot about randomization!</p>
+		</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+void
+_PyRandom_Init(void)
+{
+    char *env;
+    void *secret = &_Py_HashSecret;
+    Py_ssize_t secret_size = sizeof(_Py_HashSecret_t);
+		// swenson: this is a long prefix and suffix ^, so probably 8 bytes
+
+		if (_Py_HashSecret_Initialized)
+        return;
+    _Py_HashSecret_Initialized = 1;
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+/*
+	By default, hash randomization is disabled, and only
+	enabled if PYTHONHASHSEED is set to non-empty or if
+	"-R" is provided at the command line:
+*/
+if (!Py_HashRandomizationFlag) {
+		/* Disable the randomized hash: */
+		memset(secret, 0, secret_size);
+		return;
+}
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+env = Py_GETENV("PYTHONHASHSEED");
+if (env && *env != '\0' && strcmp(env, "random") != 0) {
+		char *endptr = env;
+		unsigned long seed;
+		seed = strtoul(env, &endptr, 10);
+		if (*endptr != '\0'
+				|| seed > 4294967295UL
+				|| (errno == ERANGE && seed == ULONG_MAX))
+		{
+				Py_FatalError("PYTHONHASHSEED must be \"random\" or an integer "
+											"in range [0; 4294967295]");
+		}
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+if (seed == 0) {
+		/* disable the randomized hash */
+		memset(secret, 0, secret_size);
+}
+else {
+		lcg_urandom(seed, (unsigned char*)secret, secret_size);
+}
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+if (seed == 0) {
+		/* disable the randomized hash */
+		memset(secret, 0, secret_size);
+}
+else {
+		<mark>lcg_urandom(seed, (unsigned char*)secret, secret_size);</mark>
+}
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">lcg_urandom</div>
+		<div class="history-item">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>lcg_urandom</code></h4>
+<pre><code data-trim data-noescape>
+/* Fill buffer with pseudo-random bytes generated by a linear congruent
+   generator (LCG):
+       x(n+1) = (x(n) * 214013 + 2531011) % 2^32
+   Use bits 23..16 of x(n) to generate a byte. */
+static void
+lcg_urandom(unsigned int x0, unsigned char *buffer, size_t size)
+{
+    size_t index;
+    unsigned int x;
+    x = x0;
+    for (index=0; index < size; index++) {
+        x *= 214013;
+        x += 2531011;
+        /* modulo 2 ^ (8 * sizeof(int)) */
+        buffer[index] = (x >> 16) & 0xff;
+    } }
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_PyRandom_Init</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/random.c</code></h3>
+	<h4><code>_PyRandom_Init</code></h4>
+<pre><code data-trim data-noescape>
+	// finish PYTHONHASHSEED if-statement
+	else {
+#ifdef MS_WINDOWS
+			(void)win32_urandom((unsigned char *)secret, secret_size, 0);
+#elif __VMS
+			vms_urandom((unsigned char *)secret, secret_size, 0);
+#elif defined(PY_GETENTROPY)
+			(void)py_getentropy(secret, secret_size, 1);
+#else
+			dev_urandom_noraise(secret, secret_size);
+#endif
+	}
+} // end of _PyRandom_Init
+</code></pre>
+</section>
+
+
+		<section data-transition="fade-in fade-out">
+			<div class="history">
+				<div class="history-item active">Py_Main</div>
+				<div class="history-item">main</div>
+			</div>
+			<h3><code>Modules/main.c</code></h3>
+			<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+while ((c = _PyOS_GetOpt(argc, argv, PROGRAM_OPTS)) != EOF) {
+		if (c == 'c') {
+				/* -c is the last option; following arguments
+					 that look like options are left for the
+					 command to interpret. */
+				command = (char *)malloc(strlen(_PyOS_optarg) + 2);
+				if (command == NULL)
+						Py_FatalError(
+							 "not enough memory to copy -c argument");
+				strcpy(command, _PyOS_optarg);
+				strcat(command, "\n");
+				break;
+		}
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Modules/main.c</code></h3>
+	<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+if (c == 'm') {
+		/* -m is the last option; following arguments
+			 that look like options are left for the
+			 module to interpret. */
+		module = (char *)malloc(strlen(_PyOS_optarg) + 2);
+		if (module == NULL)
+				Py_FatalError(
+					 "not enough memory to copy -m argument");
+		strcpy(module, _PyOS_optarg);
+		break;
+}
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Modules/main.c</code></h3>
+	<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+switch (c) {
+case 'b':
+		Py_BytesWarningFlag++;
+		break;
+
+case 'd':
+		Py_DebugFlag++;
+		break;
+
+case '3':
+		Py_Py3kWarningFlag++;
+		if (!Py_DivisionWarningFlag)
+				Py_DivisionWarningFlag = 1;
+		break;
+
+  // etc.
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Modules/main.c</code></h3>
+	<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+// check if we are just printing help or version
+// checks if stdin is interactive (i.e., terminal)
+// sets buffering of stdin, stdout, stderr
+Py_SetProgramName(argv[0]);
+Py_Initialize();
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Modules/main.c</code></h3>
+	<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+// check if we are just printing help or version
+// checks if stdin is interactive (i.e., terminal)
+// sets buffering of stdin, stdout, stderr
+Py_SetProgramName(argv[0]);
+<mark>Py_Initialize();</mark>
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_Initialize</code></h4>
+<pre><code data-trim data-noescape>
+void
+Py_Initialize(void)
+{
+    Py_InitializeEx(1);
+}
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_Initialize</code></h4>
+<pre><code data-trim data-noescape>
+void
+Py_Initialize(void)
+{
+    <mark>Py_InitializeEx(1);</mark>
+}
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_InitializeEx</code></h4>
+<pre><code data-trim data-noescape>
+void
+Py_InitializeEx(int install_sigs)
+{
+    PyInterpreterState *interp;
+    PyThreadState *tstate;
+    PyObject *bimod, *sysmod;
+    char *p;
+    char *icodeset = NULL; /* On Windows, input codeset may theoretically
+                              differ from output codeset. */
+    char *codeset = NULL;
+    char *errors = NULL;
+    int free_codeset = 0;
+    int overridden = 0;
+    PyObject *sys_stream;
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_InitializeEx</code></h4>
+<pre><code data-trim data-noescape>
+if (initialized)
+		return;
+initialized = 1;
+
+// set some flags based on environment variables
+
+_PyRandom_Init();
+
+interp = PyInterpreterState_New();
+if (interp == NULL)
+		Py_FatalError("Py_Initialize: can't make first interpreter");
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_InitializeEx</code></h4>
+<pre><code data-trim data-noescape>
+tstate = PyThreadState_New(interp);
+if (tstate == NULL)
+		Py_FatalError("Py_Initialize: can't make first thread");
+(void) PyThreadState_Swap(tstate);
+
+_Py_ReadyTypes();
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_InitializeEx</code></h4>
+<pre><code data-trim data-noescape>
+tstate = PyThreadState_New(interp);
+if (tstate == NULL)
+		Py_FatalError("Py_Initialize: can't make first thread");
+(void) PyThreadState_Swap(tstate);
+
+<mark>_Py_ReadyTypes();</mark>
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>_Py_ReadyTypes</code></h4>
+<pre><code data-trim data-noescape>
+void
+_Py_ReadyTypes(void)
+{
+    if (PyType_Ready(&PyType_Type) < 0)
+        Py_FatalError("Can't initialize type type");
+
+    if (PyType_Ready(&_PyWeakref_RefType) < 0)
+        Py_FatalError("Can't initialize weakref type");
+
+    if (PyType_Ready(&_PyWeakref_CallableProxyType) < 0)
+        Py_FatalError("Can't initialize callable weakref proxy type");
+
+    if (PyType_Ready(&_PyWeakref_ProxyType) < 0)
+        Py_FatalError("Can't initialize weakref proxy type");
+
+// ...
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+int
+PyType_Ready(PyTypeObject *type)
+{
+    PyObject *dict, *bases;
+    PyTypeObject *base;
+    Py_ssize_t i, n;
+
+    if (type->tp_flags & Py_TPFLAGS_READY) {
+        assert(type->tp_dict != NULL);
+        return 0;
+    }
+    assert((type->tp_flags & Py_TPFLAGS_READYING) == 0);
+
+    type->tp_flags |= Py_TPFLAGS_READYING;
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+#ifdef Py_TRACE_REFS
+    /* PyType_Ready is the closest thing we have to a choke point
+     * for type objects, so is the best place I can think of to try
+     * to get type objects into the doubly-linked list of all objects.
+     * Still, not all type objects go thru PyType_Ready.
+     */
+    _Py_AddToAllObjects((PyObject *)type, 0);
+#endif
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+/* Initialize tp_base (defaults to BaseObject unless that's us) */
+base = type->tp_base;
+if (base == NULL && type != &PyBaseObject_Type) {
+		base = type->tp_base = &PyBaseObject_Type;
+		Py_INCREF(base);
+}
+
+/* Now the only way base can still be NULL is if type is
+ * &PyBaseObject_Type.
+ */
+/* Initialize the base class */
+if (base && base->tp_dict == NULL) {
+		if (PyType_Ready(base) < 0)
+				goto error;
+}
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+/* Initialize ob_type if NULL.      This means extensions that want to be
+	 compilable separately on Windows can call PyType_Ready() instead of
+	 initializing the ob_type field of their type objects. */
+/* The test for base != NULL is really unnecessary, since base is only
+	 NULL when type is &PyBaseObject_Type, and we know its ob_type is
+	 not NULL (it's initialized to &PyType_Type).      But coverity doesn't
+	 know that. */
+if (Py_TYPE(type) == NULL && base != NULL)
+		Py_TYPE(type) = Py_TYPE(base);
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+		/* Initialize tp_bases */
+    bases = type->tp_bases;
+    if (bases == NULL) {
+        if (base == NULL)
+            bases = PyTuple_New(0);
+        else
+            bases = PyTuple_Pack(1, base);
+        if (bases == NULL)
+            goto error;
+        type->tp_bases = bases;
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Initialize tp_dict */
+    dict = type->tp_dict;
+    if (dict == NULL) {
+        dict = PyDict_New();
+        if (dict == NULL)
+            goto error;
+        type->tp_dict = dict;
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Initialize tp_dict */
+    dict = type->tp_dict;
+    if (dict == NULL) {
+        <mark>dict = PyDict_New();</mark>
+        if (dict == NULL)
+            goto error;
+        type->tp_dict = dict;
+    }
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyDict_New</div>
+		<div class="history-item">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/dictobject.c</code></h3>
+	<h4><code>PyDict_New</code></h4>
+<pre><code data-trim data-noescape>
+PyObject *
+PyDict_New(void)
+{
+    register PyDictObject *mp;
+    if (dummy == NULL) { /* Auto-initialize dummy */
+        dummy = PyString_FromString("&lt;dummy key>");
+        if (dummy == NULL)
+            return NULL;
+    }
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyDict_New</div>
+		<div class="history-item">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/dictobject.c</code></h3>
+	<h4><code>PyDict_New</code></h4>
+<pre><code data-trim data-noescape>
+    if (numfree) {
+        mp = free_list[--numfree];
+        _Py_NewReference((PyObject *)mp);
+        if (mp->ma_fill) {
+            EMPTY_TO_MINSIZE(mp);
+        } else {
+            /* At least set ma_table and ma_mask; these are wrong
+               if an empty but presized dict is added to freelist */
+            INIT_NONZERO_DICT_SLOTS(mp);
+        }
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyDict_New</div>
+		<div class="history-item">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/dictobject.c</code></h3>
+	<h4><code>PyDict_New</code></h4>
+<pre><code data-trim data-noescape>
+    } else {
+        mp = PyObject_GC_New(PyDictObject, &PyDict_Type);
+        if (mp == NULL)
+            return NULL;
+        EMPTY_TO_MINSIZE(mp);
+    }
+    mp->ma_lookup = lookdict_string;
+    return (PyObject *)mp;
+}
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Add type-specific descriptors to tp_dict */
+    if (add_operators(type) < 0)
+        goto error;
+    if (type->tp_methods != NULL) {
+        if (add_methods(type, type->tp_methods) < 0)
+            goto error;
+    }
+    if (type->tp_members != NULL) {
+        if (add_members(type, type->tp_members) < 0)
+            goto error;
+    }
+    if (type->tp_getset != NULL) {
+        if (add_getset(type, type->tp_getset) < 0)
+            goto error;
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Calculate method resolution order */
+    if (mro_internal(type) < 0) {
+        goto error;
+    }
+
+    /* Inherit special flags from dominant base */
+    if (type->tp_base != NULL)
+        inherit_special(type, type->tp_base);
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Initialize tp_dict properly */
+    bases = type->tp_mro;
+    assert(bases != NULL);
+    assert(PyTuple_Check(bases));
+    n = PyTuple_GET_SIZE(bases);
+    for (i = 1; i < n; i++) {
+        PyObject *b = PyTuple_GET_ITEM(bases, i);
+        if (PyType_Check(b))
+            inherit_slots(type, (PyTypeObject *)b);
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+/* All bases of statically allocated type should be statically allocated */
+if (Py_Py3kWarningFlag && !(type->tp_flags & Py_TPFLAGS_HEAPTYPE))
+    for (i = 0; i < n; i++) {
+        PyObject *b = PyTuple_GET_ITEM(bases, i);
+        if (PyType_Check(b) &&
+            (((PyTypeObject *)b)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+            char buf[300];
+            PyOS_snprintf(buf, sizeof(buf),
+                          "type '%.100s' is not dynamically allocated but "
+                          "its base type '%.100s' is dynamically allocated",
+                          type->tp_name, ((PyTypeObject *)b)->tp_name);
+            if (PyErr_WarnPy3k(buf, 1) < 0)
+                goto error;
+            break;
+        }
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Sanity check for tp_free. */
+    if (PyType_IS_GC(type) && (type->tp_flags & Py_TPFLAGS_BASETYPE) &&
+        (type->tp_free == NULL || type->tp_free == PyObject_Del)) {
+        /* This base class needs to call tp_free, but doesn't have
+         * one, or its tp_free is for non-gc'ed objects.
+         */
+        PyErr_Format(PyExc_TypeError, "type '%.100s' participates in "
+                     "gc and is a base type but has inappropriate "
+                     "tp_free slot",
+                     type->tp_name);
+        goto error;
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* if the type dictionary doesn't contain a __doc__, set it from
+       the tp_doc slot.
+     */
+    if (PyDict_GetItemString(type->tp_dict, "__doc__") == NULL) {
+        if (type->tp_doc != NULL) {
+            PyObject *doc = PyString_FromString(type->tp_doc);
+            if (doc == NULL)
+                goto error;
+            PyDict_SetItemString(type->tp_dict, "__doc__", doc);
+            Py_DECREF(doc);
+        } else {
+            PyDict_SetItemString(type->tp_dict,
+                                 "__doc__", Py_None);
+        }
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+/* Some more special stuff */
+base = type->tp_base;
+if (base != NULL) {
+    if (type->tp_as_number == NULL)
+        type->tp_as_number = base->tp_as_number;
+    if (type->tp_as_sequence == NULL)
+        type->tp_as_sequence = base->tp_as_sequence;
+    if (type->tp_as_mapping == NULL)
+        type->tp_as_mapping = base->tp_as_mapping;
+    if (type->tp_as_buffer == NULL)
+        type->tp_as_buffer = base->tp_as_buffer;
+}
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* Link into each base class's list of subclasses */
+    bases = type->tp_bases;
+    n = PyTuple_GET_SIZE(bases);
+    for (i = 0; i < n; i++) {
+        PyObject *b = PyTuple_GET_ITEM(bases, i);
+        if (PyType_Check(b) &&
+            add_subclass((PyTypeObject *)b, type) < 0)
+            goto error;
+    }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyType_Ready</div>
+		<div class="history-item">_Py_ReadyTypes</div>
+		<div class="history-item">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Objects/objects.c</code></h3>
+	<h4><code>PyType_Ready</code></h4>
+<pre><code data-trim data-noescape>
+    /* All done -- set the ready flag */
+    assert(type->tp_dict != NULL);
+    type->tp_flags =
+        (type->tp_flags & ~Py_TPFLAGS_READYING) | Py_TPFLAGS_READY;
+    return 0;
+
+  error:
+    type->tp_flags &= ~Py_TPFLAGS_READYING;
+    return -1;
+//}
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_InitializeEx</div>
+		<div class="history-item">Py_Initialize</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+	<h3><code>Python/pythonrun.c</code></h3>
+	<h4><code>Py_InitializeEx</code></h4>
+<pre><code data-trim data-noescape>
+if (!_PyFrame_Init())
+		Py_FatalError("Py_Initialize: can't init frames");
+
+if (!_PyInt_Init())
+		Py_FatalError("Py_Initialize: can't init ints");
+
+if (!_PyLong_Init())
+		Py_FatalError("Py_Initialize: can't init longs");
+
+if (!PyByteArray_Init())
+		Py_FatalError("Py_Initialize: can't init bytearray");
+
+_PyFloat_Init();
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+if (Py_VerboseFlag ||
+        (command == NULL && filename == NULL && module == NULL && stdin_is_interactive)) {
+        fprintf(stderr, "Python %s on %s\n",
+            Py_GetVersion(), Py_GetPlatform());
+        if (!Py_NoSiteFlag)
+            fprintf(stderr, "%s\n", COPYRIGHT);
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+    if (command != NULL) {
+        /* Backup _PyOS_optind and force sys.argv[0] = '-c' */
+        _PyOS_optind--;
+        argv[_PyOS_optind] = "-c";
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+    if (module != NULL) {
+        /* Backup _PyOS_optind and force sys.argv[0] = '-c'
+           so that PySys_SetArgv correctly sets sys.path[0] to ''
+           rather than looking for a file called "-m". See
+           tracker issue #8202 for details. */
+        _PyOS_optind--;
+        argv[_PyOS_optind] = "-c";
+    }
+
+		PySys_SetArgv(argc-_PyOS_optind, argv+_PyOS_optind);
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+    if ((Py_InspectFlag || (command == NULL && filename == NULL && module == NULL)) &&
+        isatty(fileno(stdin))) {
+        PyObject *v;
+        v = PyImport_ImportModule("readline");
+        if (v == NULL)
+            PyErr_Clear();
+        else
+            Py_DECREF(v);
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+    if (command) {
+        sts = PyRun_SimpleStringFlags(command, &cf) != 0;
+        free(command);
+    } else if (module) {
+        sts = (RunModule(module, 1) != 0);
+        free(module);
+    }
+    else {
+			if (filename == NULL && stdin_is_interactive) {
+					Py_InspectFlag = 0; /* do exit on SystemExit */
+					RunStartupFile(&cf);
+			}
+			/* XXX */
+			sts = -1;               /* keep track of whether we've already run __main__ */
+
+</code></pre>
+</section>
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+        if (filename != NULL) {
+            sts = RunMainFromImporter(filename);
+        }
+
+        if (sts==-1 && filename!=NULL) {
+            if ((fp = fopen(filename, "r")) == NULL) {
+                fprintf(stderr, "%s: can't open file '%s': [Errno %d] %s\n",
+                    argv[0], filename, errno, strerror(errno));
+                return 2;
+            }
+            else if (skipfirstline) {
+                int ch;
+                /* Push back first newline so line numbers
+                   remain the same */
+                while ((ch = getc(fp)) != EOF) {
+                    if (ch == '\n') {
+                        (void)ungetc(ch, fp);
+                        break;
+                    }
+                }
+            }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+        if (filename != NULL) {
+            <mark>sts = RunMainFromImporter(filename);</mark>
+        }
+
+        if (sts==-1 && filename!=NULL) {
+            if ((fp = fopen(filename, "r")) == NULL) {
+                fprintf(stderr, "%s: can't open file '%s': [Errno %d] %s\n",
+                    argv[0], filename, errno, strerror(errno));
+                return 2;
+            }
+            else if (skipfirstline) {
+                int ch;
+                /* Push back first newline so line numbers
+                   remain the same */
+                while ((ch = getc(fp)) != EOF) {
+                    if (ch == '\n') {
+                        (void)ungetc(ch, fp);
+                        break;
+                    }
+                }
+            }
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunMainFromImporter</code></h4>
+<pre><code data-trim data-noescape>
+
+static int RunMainFromImporter(char *filename)
+{
+    PyObject *argv0 = NULL, *importer = NULL;
+    if ((argv0 = PyString_FromString(filename)) &&
+        (importer = PyImport_GetImporter(argv0)) &&
+        (importer->ob_type != &PyNullImporter_Type))
+    {
+
+
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunMainFromImporter</code></h4>
+<pre><code data-trim data-noescape>
+				/* argv0 is usable as an import source, so
+							 put it in sys.path[0] and import __main__ */
+			PyObject *sys_path = NULL;
+			if ((sys_path = PySys_GetObject("path")) &&
+			 !PyList_SetItem(sys_path, 0, argv0))
+			{
+			 Py_INCREF(argv0);
+			 Py_DECREF(importer);
+			 sys_path = NULL;
+			 return RunModule("__main__", 0) != 0;
+			}
+    }
+
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunMainFromImporter</code></h4>
+<pre><code data-trim data-noescape>
+				/* argv0 is usable as an import source, so
+							 put it in sys.path[0] and import __main__ */
+			PyObject *sys_path = NULL;
+			if ((sys_path = PySys_GetObject("path")) &&
+			 !PyList_SetItem(sys_path, 0, argv0))
+			{
+			 Py_INCREF(argv0);
+			 Py_DECREF(importer);
+			 sys_path = NULL;
+			 return <mark>RunModule("__main__", 0)</mark> != 0;
+			}
+    }
+
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunModule</code></h4>
+<pre><code data-trim data-noescape>
+static int RunModule(char *module, int set_argv0)
+{
+    PyObject *runpy, *runmodule, *runargs, *result;
+    runpy = PyImport_ImportModule("runpy");
+    if (runpy == NULL) {
+        fprintf(stderr, "Could not import runpy module\n");
+        return -1;
+    }
+    runmodule = PyObject_GetAttrString(runpy, "_run_module_as_main");
+    if (runmodule == NULL) {
+        fprintf(stderr, "Could not access runpy._run_module_as_main\n");
+				Py_DECREF(runpy);
+        return -1;
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunModule</code></h4>
+<pre><code data-trim data-noescape>
+    runargs = Py_BuildValue("(si)", module, set_argv0);
+    if (runargs == NULL) {
+        fprintf(stderr,
+            "Could not create arguments for runpy._run_module_as_main\n");
+        Py_DECREF(runpy);
+        Py_DECREF(runmodule);
+        return -1;
+			}
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunModule</code></h4>
+<pre><code data-trim data-noescape>
+
+    result = PyObject_Call(runmodule, runargs, NULL);
+    if (result == NULL) {
+        PyErr_Print();
+    }
+    Py_DECREF(runpy);
+    Py_DECREF(runmodule);
+    Py_DECREF(runargs);
+    if (result == NULL) {
+        return -1;
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunModule</code></h4>
+<pre><code data-trim data-noescape>
+
+    result = <mark>PyObject_Call</mark>(runmodule, runargs, NULL);
+    if (result == NULL) {
+        PyErr_Print();
+    }
+    Py_DECREF(runpy);
+    Py_DECREF(runmodule);
+    Py_DECREF(runargs);
+    if (result == NULL) {
+        return -1;
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyObject_Call</div>
+		<div class="history-item ">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Objects/abstract.c</code></h3>
+<h4><code>PyObject_Call</code></h4>
+<pre><code data-trim data-noescape>
+PyObject *PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw) {
+    ternaryfunc call;
+    if ((call = func->ob_type->tp_call) != NULL) {
+        PyObject *result;
+        if (Py_EnterRecursiveCall(" while calling a Python object"))
+            return NULL;
+        result = (*call)(func, arg, kw);
+        Py_LeaveRecursiveCall();
+        if (result == NULL && !PyErr_Occurred())
+            PyErr_SetString(
+                PyExc_SystemError,
+                "NULL result without error in PyObject_Call");
+        return result;
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">PyObject_Call</div>
+		<div class="history-item ">RunModule</div>
+		<div class="history-item">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Objects/abstract.c</code></h3>
+<h4><code>PyObject_Call</code></h4>
+<pre><code data-trim data-noescape>
+
+    PyErr_Format(PyExc_TypeError, "'%.200s' object is not callable",
+                 func->ob_type->tp_name);
+    return NULL;
+}
+
+</code></pre>
+</section>
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">RunMainFromImporter</div>
+		<div class="history-item">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>RunMainFromImporter</code></h4>
+<pre><code data-trim data-noescape>
+    Py_XDECREF(argv0);
+    Py_XDECREF(importer);
+    if (PyErr_Occurred()) {
+        PyErr_Print();
+        return 1;
+    }
+    return -1;
+}
+
+</code></pre>
+</section>
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+            {
+                /* XXX: does this work on Win/Win64? (see posix_fstat) */
+                struct stat sb;
+                if (fstat(fileno(fp), &sb) == 0 &&
+                    S_ISDIR(sb.st_mode)) {
+                    fprintf(stderr, "%s: '%s' is a directory, cannot continue
+", argv[0], filename);
+                    fclose(fp);
+                    return 1;
+                }
+            }
+        }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+        if (sts==-1) {
+            /* call pending calls like signal handlers (SIGINT) */
+            if (Py_MakePendingCalls() == -1) {
+                PyErr_Print();
+                sts = 1;
+            } else {
+                sts = PyRun_AnyFileExFlags(
+                    fp,
+                    filename == NULL ? "<stdin>" : filename,
+                    filename != NULL, &cf) != 0;
+            }
+        }
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+    /* Check this environment variable at the end, to give programs the
+     * opportunity to set it from Python.
+     */
+    if (!Py_InspectFlag &&
+        (p = Py_GETENV("PYTHONINSPECT")) && *p != '')
+    {
+        Py_InspectFlag = 1;
+    }
+
+</code></pre>
+</section>
+
+
+
+
+<section data-transition="fade-in fade-out">
+	<div class="history">
+		<div class="history-item active">Py_Main</div>
+		<div class="history-item">main</div>
+	</div>
+<h3><code>Modules/main.c</code></h3>
+<h4><code>Py_Main</code></h4>
+<pre><code data-trim data-noescape>
+
+    if (Py_InspectFlag && stdin_is_interactive &&
+        (filename != NULL || command != NULL || module != NULL)) {
+        Py_InspectFlag = 0;
+        /* XXX */
+        sts = PyRun_AnyFileFlags(stdin, "<stdin>", &cf) != 0;
+    }
+
+		Py_Finalize();
+		return sts;
+}
+
+</code></pre>
+</section>
+
+
+<section>
+	<h3>Questions!</h3>
+	<p>I know I have a lot.</p>
+	<p>Slides available at <a href="https://github.com/swenson/cpython-internals">github.com/swenson/cpython-internals</a></p>
+</section>
+
+	</div>
+</div>
+
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info https://github.com/hakimel/reveal.js#configuration
+			Reveal.initialize({
+				history: true,
+				transition: 'slide',
+				transitionSpeed: 'fast',
+
+				// More info https://github.com/hakimel/reveal.js#dependencies
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad();
+					hljs.configure({tabReplace: '  '});
+				}}]
+			});
+		</script>
+	</body>
+</html>
